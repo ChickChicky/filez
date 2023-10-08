@@ -1,5 +1,3 @@
-#![allow(unused)]
-
 use crosscurses::*;
 use std::{
     env::{
@@ -16,10 +14,11 @@ use std::{
     sync::{
         Arc,
         Mutex,
-        mpsc::{ self, Sender, Receiver }
     },
     thread,
-    vec, time::Duration, borrow::BorrowMut,
+    vec, 
+    time::Duration, 
+    collections::HashMap,
 };
 use iota::iota;
 
@@ -49,67 +48,67 @@ iota! {
 
 const ICONS: &[Icon] = &[
     Icon {
-        m: |f,p| f.ends_with(".rs"),
+        m: |_f,_p| _f.ends_with(".rs"),
         icon: "\u{e7a8}",
         color: ICON_COLOR_PAIR_RUST,
     },
     Icon{
-        m: |f,p| (f == ".git" && p.is_dir()) || (f == ".gitignore" && p.is_file()) || (p.is_file() && (f == "HEAD" || f == "FETCH_HEAD" || f == "description" || f == "config") && p.parent().file_name == ".git"),
+        m: |_f,_p| (_f == ".git" && _p.is_dir()) || (_f == ".gitignore" && _p.is_file()) || (_p.is_file() && (_f == "HEAD" || _f == "FETCH_HEAD" || _f == "description" || _f == "config") && _p.parent().file_name == ".git"),
         icon: "\u{e702}",
         color: ICON_COLOR_PAIR_GIT,
     },
     Icon {
-        m: |f,p| f.ends_with(".toml") || f.ends_with(".toml"),
+        m: |_f,_p| _f.ends_with(".toml") || _f.ends_with(".toml"),
         icon: "\u{f013}",
         color: ICON_COLOR_PAIR_CONFIG,
     },
     Icon {
-        m: |f,p| f.ends_with(".lock"),
+        m: |_f,_p| _f.ends_with(".lock"),
         icon: "\u{f023}",
         color: ICON_COLOR_PAIR_LOCK,
     },
     Icon {
-        m: |f,p| f.ends_with(".js") || f == "package.json" || f == "node_modules",
+        m: |_f,_p| _f.ends_with(".js") || _f == "package.json" || _f == "node_modules",
         icon: "\u{e718}",
         color: ICON_COLOR_PAIR_JS,
     },
     Icon {
-        m: |f,p| f.ends_with(".json") || f.ends_with(".jsonc") || f.ends_with(".jsonl"),
+        m: |_f,_p| _f.ends_with(".json") || _f.ends_with(".jsonc") || _f.ends_with(".jsonl"),
         icon: "\u{e60b}",
         color: ICON_COLOR_PAIR_JSON,
     },
     Icon {
-        m: |f,p| f.ends_with(".svg") || f.ends_with(".png") || f.ends_with(".jpg") || f.ends_with(".jpeg"),
+        m: |_f,_p| _f.ends_with(".svg") || _f.ends_with(".png") || _f.ends_with(".jpg") || _f.ends_with(".jpeg"),
         icon: "\u{e701}",
         color: ICON_COLOR_PAIR_SVG,
     },
     Icon {
-        m: |f,p| f.ends_with(".css"),
+        m: |_f,_p| _f.ends_with(".css"),
         icon: "\u{f13c}",
         color: ICON_COLOR_PAIR_CSS,
     },
     Icon {
-        m: |f,p| f.ends_with(".html"),
+        m: |_f,_p| _f.ends_with(".html"),
         icon: "\u{f13b}",
         color: ICON_COLOR_PAIR_HTML,
     },
     Icon {
-        m: |f,p| f.ends_with(".woff2") || f.ends_with(".ttf"),
+        m: |_f,_p| _f.ends_with(".woff2") || _f.ends_with(".ttf"),
         icon: "\u{f031}",
         color: ICON_COLOR_PAIR_FONT,
     },
     Icon {
-        m: |f,p| p.is_dir(),
+        m: |_f,_p| _p.is_dir(),
         icon: "\u{f07b}",
         color: ICON_COLOR_PAIR_NONE,
     },
     Icon {
-        m: |f,p| f.ends_with(".txt"),
+        m: |_f,_p| _f.ends_with(".txt"),
         icon: "\u{f15c}",
         color: ICON_COLOR_PAIR_NONE,
     },
     Icon {
-        m: |f,p| p.is_file(),
+        m: |_f,_p| _p.is_file(),
         icon: "\u{f15b}",
         color: ICON_COLOR_PAIR_NONE,
     },
@@ -165,6 +164,7 @@ impl FileStat {
         }
     }
 
+    #[allow(unused)]
     /// Returns the metadata of the file
     pub fn metadata(&self) -> Metadata {
         fs::metadata(self.path()).unwrap()
@@ -211,6 +211,13 @@ impl FileWatcher {
 
 }
 
+#[derive(Clone)]
+#[derive(Copy)]
+struct View {
+    selected: i32,
+    scroll: i32
+}
+
 fn main() {
     let mut args = cmdargs();
 
@@ -242,6 +249,7 @@ fn main() {
     let file_watcher = FileWatcher::new(args.nth(1));
     
     let mut selected: i32 = 0;
+    let mut selected_hist: HashMap<String,View> = HashMap::new();
     let mut scroll: i32 = 0;
 
     let thread_file_watcher = file_watcher.clone();
@@ -316,12 +324,14 @@ fn main() {
 
         if filez.len() > 0 { selected = selected.clamp(0, filez.len() as i32-1); }
 
-        if selected > win.get_max_y()-4+scroll {
-            while selected > win.get_max_y()-4+scroll {scroll += 1;}
+        if selected > win.get_max_y()-3+scroll {
+            while selected > win.get_max_y()-3+scroll {scroll += 1;}
         }
         if selected < scroll {
             while selected < scroll {scroll -= 1;}
         }
+
+        selected_hist.insert(path.to_str().unwrap().to_string(), View{selected,scroll});
         
         win.refresh();
 
@@ -336,14 +346,24 @@ fn main() {
                         path.pop();
                     }));
                     while file_watcher.path2().to_str() == old_path.to_str() { /*thread::sleep(Duration::from_millis(100))*/ }
-                    let mut i: usize = 0;
-                    for f in file_watcher.filez() {
-                        if f.file_name() == old_path.file_name().unwrap() {
-                            selected = i as i32;
-                            break;
+                    let nview: View = selected_hist.get(&file_watcher.path().to_str().unwrap().to_string()).copied().unwrap_or_else(||{
+                        let mut i: usize = 0;
+                        for f in file_watcher.filez() {
+                            if f.file_name() == old_path.file_name().unwrap() {
+                                return View {
+                                    selected: i as i32,
+                                    scroll: i as i32
+                                };
+                            }
+                            i += 1;
                         }
-                        i += 1;
-                    }
+                        View { 
+                            selected: 0,
+                            scroll: 0,
+                        }
+                    });
+                    selected = nview.selected;
+                    scroll = nview.scroll;
                 }
                 if c == '\x0a' {
                     let f: FileStat = file_watcher.filez()[selected as usize].clone();
@@ -353,8 +373,24 @@ fn main() {
                             path.push(f.file_name());
                         }));
                         while file_watcher.path2().to_str() == old_path.to_str() { }
-                        scroll = 0;
-                        selected = 0;
+                        let nview: View = selected_hist.get(&file_watcher.path().to_str().unwrap().to_string()).copied().unwrap_or_else(||{
+                            let mut i: usize = 0;
+                            for f in file_watcher.filez() {
+                                if f.file_name() == old_path.file_name().unwrap() {
+                                    return View {
+                                        selected: i as i32,
+                                        scroll: i as i32
+                                    };
+                                }
+                                i += 1;
+                            }
+                            View { 
+                                selected: 0,
+                                scroll: 0,
+                            }
+                        });
+                        selected = nview.selected;
+                        scroll = nview.scroll;
                     }
                     else {
                         if consts::OS == "windows" {
