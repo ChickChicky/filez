@@ -17,8 +17,11 @@ use std::{
     },
     thread,
     vec, 
-    time::Duration, 
+    time::{ Duration, UNIX_EPOCH }, 
     collections::HashMap,
+};
+use chrono::{
+    DateTime, Local,
 };
 use iota::iota;
 
@@ -124,12 +127,16 @@ struct FileStat {
 }
 impl Into<FileStat> for DirEntry {
     fn into(self) -> FileStat {
-        let p = self.path();
+        self.path().into()
+    }
+}
+impl Into<FileStat> for PathBuf {
+    fn into(self) -> FileStat {
         FileStat {
-            typ: 0 | (if p.is_dir() {FileStat::TYPE_DIR} else {0}) | (if p.is_file() {FileStat::TYPE_FILE} else {0}),
-            path: self.path().to_str().unwrap().to_string(),
-            file_name: self.file_name().to_str().unwrap().to_string(),
-        }
+            typ: 0 | (if self.is_dir() {FileStat::TYPE_DIR} else {0}) | (if self.is_file() {FileStat::TYPE_FILE} else {0}),
+            path: self.to_str().unwrap().to_string(),
+            file_name: self.file_name().unwrap().to_str().unwrap().to_string()
+        }   
     }
 }
 impl FileStat {
@@ -155,16 +162,11 @@ impl FileStat {
     }
     /// Returns a new FileStat of the parent of the file
     pub fn parent(&self) -> FileStat {
-        let temp:PathBuf = PathBuf::from(self.path.as_str());
-        let parent = temp.parent().unwrap();
-        FileStat {
-            typ: 0 | (if parent.is_dir() {FileStat::TYPE_DIR} else {0}) | (if parent.is_file() {FileStat::TYPE_FILE} else {0}),
-            path: parent.to_str().unwrap().to_string(),
-            file_name: parent.file_name().unwrap().to_str().unwrap().to_string(),
-        }
+        let temp: PathBuf = PathBuf::from(self.path.as_str());
+        let parent: PathBuf = temp.parent().unwrap().to_path_buf();
+        parent.into()
     }
 
-    #[allow(unused)]
     /// Returns the metadata of the file
     pub fn metadata(&self) -> Metadata {
         fs::metadata(self.path()).unwrap()
@@ -246,18 +248,18 @@ fn main() {
     init_pair(ICON_COLOR_PAIR_HTML, COLOR_YELLOW, COLOR_BLACK);
     init_pair(ICON_COLOR_PAIR_FONT, COLOR_RED, COLOR_BLACK);
 
-    let file_watcher = FileWatcher::new(args.nth(1));
+    let file_watcher: FileWatcher = FileWatcher::new(args.nth(1));
     
     let mut selected: i32 = 0;
     let mut selected_hist: HashMap<String,View> = HashMap::new();
     let mut scroll: i32 = 0;
 
-    let thread_file_watcher = file_watcher.clone();
+    let thread_file_watcher: FileWatcher = file_watcher.clone();
     thread::spawn(move || {
         loop {
             thread::sleep(Duration::from_millis(100));
             let p = thread_file_watcher.path();
-            let mut filez = vec![];
+            let mut filez: Vec<FileStat> = vec![];
             if let Ok(entries) = fs::read_dir(p.as_path()) {
                 for entry in entries {
                     if let Ok(entry) = entry {
@@ -273,8 +275,8 @@ fn main() {
 
     loop {
 
-        let path = file_watcher.path();
-        let filez = file_watcher.filez();
+        let path: PathBuf = file_watcher.path();
+        let filez: Vec<FileStat> = file_watcher.filez();
 
         win.clear();
 
@@ -320,6 +322,13 @@ fn main() {
             win.printw(format!("{}",entry.file_name()));
             win.attroff(COLOR_PAIR(ft));
             if i+scroll == selected { win.attroff(A_REVERSE); }
+
+            win.mv(i+1 as i32,25);
+            win.clrtoeol();
+
+            let meta: Metadata = entry.metadata();
+            //format("%d-%m-%Y %H:%M");
+            win.printw(format!(" {}",DateTime::from_timestamp((meta.accessed().unwrap().duration_since(UNIX_EPOCH).unwrap().as_secs() as i64)+(Local::now().offset().local_minus_utc() as i64), 0).unwrap().format("%d-%m-%Y %H:%M")));
         }
 
         if filez.len() > 0 { selected = selected.clamp(0, filez.len() as i32-1); }
@@ -341,7 +350,7 @@ fn main() {
                     break
                 }
                 if c == '\x08' {
-                    let old_path  = file_watcher.path();
+                    let old_path: PathBuf  = file_watcher.path();
                     file_watcher.set_path(Box::new(|path: &mut PathBuf|{
                         path.pop();
                     }));
@@ -368,7 +377,7 @@ fn main() {
                 if c == '\x0a' {
                     let f: FileStat = file_watcher.filez()[selected as usize].clone();
                     if f.is_dir() {
-                        let old_path  = file_watcher.path();
+                        let old_path: PathBuf  = file_watcher.path();
                         file_watcher.set_path(Box::new(move |path: &mut PathBuf|{
                             path.push(f.file_name());
                         }));
